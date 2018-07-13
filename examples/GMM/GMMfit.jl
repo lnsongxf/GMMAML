@@ -1,8 +1,5 @@
-using MXNet
-using Econometrics.stnorm
-using Econometrics.dstats
+using MXNet, Econometrics
 include("QIVmodel_s.jl") # load auction model code
-include("TrainNet.jl")
 
 function main()
     # make data

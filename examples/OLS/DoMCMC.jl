@@ -1,4 +1,4 @@
-using Distributions
+using Econometrics, Distributions, Glob
 include("Model.jl") #
 include(Pkg.dir()"/MPI/examples/montecarlo.jl")
 
@@ -8,12 +8,12 @@ function OLSWrapper()
     verbosity = true
     chain = 0.0 # initialize outside loop
     # get the data for the rep (drawn from design at true param. values)
-    θinit = [zeros(11); 1.0]
-    y, x, θtrue = dgp(n)
+    θinit = [zeros(6); 1.0]
+    y, z, θtrue = dgp(n)
     # define things for MCMC
     burnin = 20000
     ChainLength = 20000
-    lnL = θ -> logL(θ, y, x)
+    lnL = θ -> logL(θ, y, z)
     # initial proposal moves one at a time
     Proposal = θ -> proposal1(θ, tuning)
     Prior = θ -> prior(θ) # uniform, doesn't matter
@@ -26,20 +26,20 @@ function OLSWrapper()
     chain = chain[keep,:]
     # now use a MVN random walk proposal 
     Σ = cov(chain[:,1:end-1])
-    tuning = 0.2
-    for j = 1:5
+    tuning = 0.5
+    for j = 1:2
         P = chol(Σ)
         Proposal = θ -> proposal2(θ,tuning*P)
-        if j == 5
+        if j == 2
             ChainLength = 100000
         end    
         chain = mcmc(θinit, ChainLength, 0, Prior, lnL, Proposal, verbosity)
         accept = mean(chain[:,end])
         #println("tuning: ", tuning, "  acceptance rate: ", accept)
         if accept > 0.35
-            tuning *= 1.2
+            tuning *= 1.5
         elseif accept < 0.25
-            tuning *= 0.8
+            tuning *= 0.5
         end
         # keep every 10th
         i = 1:size(chain,1)
@@ -51,15 +51,37 @@ function OLSWrapper()
     # make the Zs for the thetas
     #option = "Asymptotic"
     option = "Bootstrap"
-    junk = MakeZ(θinit, y, x, option) # get size 
+    junk = MakeZ(θinit, y, z, option) # get size 
     Z = zeros(size(chain,1), size(junk,2))
     S = size(chain,1)
     for i = 1:S
         θ = chain[i,1:end-1]
-        Z[i,:] = MakeZ(θ, y, x, option)
+        Z[i,:] = MakeZ(θ, y, z, option)
     end
-    dstats(chain);
-    println(θtrue)
+
+    # NN data
+    θs = chain[:,1:end-1]
+    noutputs = size(θs,2)
+    data = [θs Z]
+    data = [data; hcat(θtrue', zeros(size(Z,2))')]
+    # NN config
+    trainsize = Int(round(0.8*size(θs,1)))
+    savefile = "olsnet"
+    layerconfig = [30, 12, 0, 0]
+    epochs = 200
+    # Train
+    TrainNet(data, trainsize, noutputs, layerconfig, 512, epochs, savefile)
+    Y = data[trainsize+1:end,1:noutputs]
+    title = "linear regression example"
+    params = ["α","β1","β2","β3","β4","β5","σ"]
+    fit = AnalyzeNet(savefile, epochs, data, trainsize, noutputs, title=title, params=params, doplot=true);
+    olsfit, junk, junk, ess, junk = ols(y, z[:,1:6])
+    θhat = vec([olsfit; sqrt.(ess/(size(y,1)-size(olsfit,1)))])
+    fit = fit[end,:]
+    prettyprint([fit θhat θtrue], ["NN", "OLS", "TRUE"])
+    rm.(glob("olsnet-*"))
+
+
     return chain[:,1:end-1], Z
 end    
 
